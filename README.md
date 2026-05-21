@@ -1,164 +1,228 @@
 # sample-test-repo
 
-A sample repository of **agent skills** — self-contained, reusable capabilities that an AI agent can load on demand to perform a specialized task (parsing a PDF, building a slide deck, querying an API, etc.).
+Sample agent skills repository (created for ISS-144).
 
-This README documents the conventions and best practices we follow when authoring skills in this repo. Following these guidelines keeps skills small, discoverable, safe to compose, and easy for agents to invoke correctly.
-
----
-
-## Table of contents
-
-- [Repository layout](#repository-layout)
-- [Best practices](#best-practices)
-  - [1. Scope each skill narrowly](#1-scope-each-skill-narrowly)
-  - [2. Use clear, deterministic naming](#2-use-clear-deterministic-naming)
-  - [3. Write a complete `SKILL.md`](#3-write-a-complete-skillmd)
-  - [4. Choose strong trigger words](#4-choose-strong-trigger-words)
-  - [5. Define explicit input / output contracts](#5-define-explicit-input--output-contracts)
-  - [6. Prefer dedicated tools over shell glue](#6-prefer-dedicated-tools-over-shell-glue)
-  - [7. Make skills idempotent and side-effect aware](#7-make-skills-idempotent-and-side-effect-aware)
-  - [8. Handle errors loudly, fail safely](#8-handle-errors-loudly-fail-safely)
-  - [9. Be deliberate about secrets and PII](#9-be-deliberate-about-secrets-and-pii)
-  - [10. Keep skills token-efficient](#10-keep-skills-token-efficient)
-  - [11. Ship tests with every skill](#11-ship-tests-with-every-skill)
-  - [12. Version and document breaking changes](#12-version-and-document-breaking-changes)
-- [Contributing a new skill](#contributing-a-new-skill)
+This repository hosts a collection of **AI agent skills** — small, composable
+units of capability (a `SKILL.md` spec plus optional code) that an LLM-driven
+agent can discover and invoke at runtime.
 
 ---
 
-## Repository layout
+## Table of Contents
+
+- [Overview](#overview)
+- [Repository Layout](#repository-layout)
+- [Best Practices](#best-practices)
+  - [1. Skill Design](#1-skill-design)
+  - [2. Writing Effective `SKILL.md`](#2-writing-effective-skillmd)
+  - [3. Prompting & Instructions](#3-prompting--instructions)
+  - [4. Inputs, Outputs & Schemas](#4-inputs-outputs--schemas)
+  - [5. Tool & Dependency Usage](#5-tool--dependency-usage)
+  - [6. Error Handling & Robustness](#6-error-handling--robustness)
+  - [7. Testing & Evaluation](#7-testing--evaluation)
+  - [8. Security & Safety](#8-security--safety)
+  - [9. Observability & Logging](#9-observability--logging)
+  - [10. Versioning & Release](#10-versioning--release)
+  - [11. Documentation](#11-documentation)
+  - [12. Contributing](#12-contributing)
+
+---
+
+## Overview
+
+An *agent skill* in this repo is a directory containing:
 
 ```
 skills/
-  <skill-name>/
-    SKILL.md          # Description, triggers, usage contract (required)
-    skill.py          # Implementation entry point
-    examples/         # Minimal, runnable examples
-    tests/            # Unit + integration tests
+└── <skill-name>/
+    ├── SKILL.md          # Human + LLM readable specification
+    ├── examples/         # Worked examples and golden outputs
+    ├── tests/            # Automated tests / evals
+    └── src/              # Optional supporting code
 ```
 
-Every directory under `skills/` is exactly one skill. No nested skills, no shared mutable state between siblings.
+Each skill should be small enough to reason about in isolation but rich
+enough to deliver a clearly-named capability end-to-end.
+
+## Repository Layout
+
+| Path           | Purpose                                                            |
+| -------------- | ------------------------------------------------------------------ |
+| `skills/`      | One sub-directory per skill                                        |
+| `evals/`       | Cross-skill evaluation harnesses and golden datasets               |
+| `docs/`        | Long-form design docs, ADRs, and tutorials                         |
+| `scripts/`     | Repo-level automation (linting, schema validation, release)        |
+| `.github/`     | CI workflows and issue / PR templates                              |
 
 ---
 
-## Best practices
+## Best Practices
 
-### 1. Scope each skill narrowly
+The following guidelines are **mandatory for new skills** and recommended for
+any update to existing skills. They exist to keep the catalogue consistent,
+safe, and easy for both humans and agents to consume.
 
-A skill should do **one thing** well. If the description needs the word "and" more than once, split it.
+### 1. Skill Design
 
-- ✅ `pdf-extract-text` — extracts text from a PDF.
-- ✅ `pdf-fill-form` — fills an interactive PDF form.
-- ❌ `pdf-toolkit` — extracts, fills, merges, redacts, OCRs.
+- **Single responsibility.** A skill should do one well-defined thing. If you
+  catch yourself writing "and" in the description, split it.
+- **Composable over monolithic.** Prefer skills that take structured input
+  and return structured output, so they can be chained by an agent.
+- **Deterministic where possible.** Hide non-determinism (LLM calls, network
+  IO) behind clear interfaces so the skill is testable.
+- **Idempotent side-effects.** If a skill writes to external systems, it
+  should be safe to retry. Document the idempotency key.
+- **Name with intent.** Use a verb-noun pattern (e.g. `summarize-pdf`,
+  `extract-invoice-fields`, `lookup-customer`).
 
-Narrow skills are easier for the agent to select, easier to test, and safer to compose.
+### 2. Writing Effective `SKILL.md`
 
-### 2. Use clear, deterministic naming
+Every skill **must** ship a `SKILL.md` at its root. It is the contract that
+both humans and agents rely on. At minimum it must contain:
 
-- Use lowercase, hyphen-separated names: `xlsx-build-report`, not `xlsxBuildReport`.
-- Lead with the domain (`pdf-`, `xlsx-`, `pptx-`, `github-`, `devrev-`).
-- The name should read as a verb phrase describing the outcome.
-- Never rename a skill in place — deprecate the old name (see [§12](#12-version-and-document-breaking-changes)).
+```markdown
+---
+name: <skill-name>
+version: 0.1.0
+owner: <github-handle-or-team>
+stability: experimental | beta | stable
+triggers: ["keyword1", "keyword2"]   # words the agent uses to discover the skill
+---
 
-### 3. Write a complete `SKILL.md`
+# <Human-readable title>
 
-Every skill **must** ship a `SKILL.md` with these sections:
+## Description
+One paragraph: what the skill does and when to use it.
 
-| Section | Purpose |
-|---|---|
-| `name` | The canonical skill name. |
-| `description` | One- or two-sentence summary of what it does. |
-| `triggers` | The vocabulary that should cause the agent to load this skill. |
-| `inputs` | Required and optional parameters, with types. |
-| `outputs` | What the caller gets back (and in what shape). |
-| `examples` | At least one end-to-end example. |
-| `non-goals` | Things this skill explicitly does *not* do. |
+## When NOT to use
+Explicit anti-patterns — protects the agent from misuse.
 
-`SKILL.md` is the contract the agent reads — treat it as production documentation, not a scratch note.
+## Inputs
+Schema or table of expected inputs (name, type, required, description).
 
-### 4. Choose strong trigger words
+## Outputs
+Schema or table of returned values, including error shape.
 
-Triggers are the words that route a user request to your skill. Good triggers are:
+## Examples
+At least one happy-path example and one edge-case example.
+```
 
-- **Specific** — `.xlsx`, `pivot table`, `vlookup` beats generic terms like `data`.
-- **Plural-aware** — include both `slide` and `slides`, `chart` and `charts`.
-- **Symmetric** — include file extensions *and* the product name (`xlsx`, `Excel`, `spreadsheet`).
-- **Non-overlapping** — if two skills compete for the same trigger, one of them is mis-scoped.
+- Keep the front-matter machine-parseable (YAML).
+- Put the **most important guidance first** — agents truncate.
+- Use imperative voice ("Return JSON with…") not narrative voice.
 
-When in doubt, add a short "MANDATORY TRIGGERS" list at the end of the description so the router never misses them.
+### 3. Prompting & Instructions
 
-### 5. Define explicit input / output contracts
+- **Separate system, developer, and user instructions.** Never concatenate
+  them into one blob.
+- **Be explicit about output format.** If you need JSON, say so and show a
+  literal example.
+- **Avoid negative-only instructions.** "Do not return prose" is weaker than
+  "Return only a single JSON object that matches the schema".
+- **Quote untrusted input.** When inserting user text into a prompt, wrap it
+  in clear delimiters (e.g. triple back-ticks) and instruct the model to
+  treat it as data, not instructions. This mitigates prompt injection.
+- **Stay under context budget.** Prefer retrieval and summaries over dumping
+  whole documents into the prompt.
 
-- Document every argument: name, type, whether it's required, default value, allowed range.
-- Validate inputs at the entry point and return a typed error — never crash with a stack trace into the agent context.
-- Return structured outputs (dicts / dataclasses), not free-form strings. The agent should not have to parse prose to find a result.
+### 4. Inputs, Outputs & Schemas
 
-### 6. Prefer dedicated tools over shell glue
+- Define I/O with **JSON Schema** (or Pydantic / Zod) and check it in.
+- Validate inputs **before** calling the model.
+- Validate outputs **after** the model returns and fail loudly on mismatch.
+- Version your schemas; do not silently change field meanings.
+- Prefer `snake_case` keys, ISO-8601 timestamps, and explicit units.
 
-If the runtime exposes purpose-built tools (file read/write/edit, HTTP fetch, search), use them instead of shelling out to `cat`, `sed`, `awk`, or `curl`. Dedicated tools:
+### 5. Tool & Dependency Usage
 
-- show up cleanly in the agent's trace,
-- carry the right permission scopes, and
-- are easier for reviewers to audit.
+- List every external tool/API a skill uses at the top of `SKILL.md`.
+- Pin dependencies (`requirements.txt`, `package-lock.json`, `go.sum`, …).
+- Avoid network calls inside unit tests — mock them.
+- If a skill depends on another skill, declare it explicitly; do not call
+  internals.
 
-Reserve `bash` for things that genuinely need a shell (builds, package managers, git, process management).
+### 6. Error Handling & Robustness
 
-### 7. Make skills idempotent and side-effect aware
+- Return **structured errors**, not stack traces:
+  ```json
+  {"error": {"code": "INVALID_INPUT", "message": "...", "retryable": false}}
+  ```
+- Distinguish **retryable** (timeouts, 5xx) from **non-retryable**
+  (validation, auth) errors.
+- Set sensible timeouts on every outbound call.
+- Implement exponential backoff with jitter for retries.
+- Fail closed: when in doubt, refuse rather than guess.
 
-- Running the same skill twice with the same inputs should produce the same result.
-- Any skill that writes to a filesystem, calls a paid API, or mutates external state must say so loudly in `SKILL.md` under a **"Side effects"** heading.
-- Provide a `--dry-run` mode for anything destructive.
+### 7. Testing & Evaluation
 
-### 8. Handle errors loudly, fail safely
+- **Unit tests** for pure code paths — fast, deterministic, hermetic.
+- **Golden tests** in `examples/` that pin expected outputs for fixed
+  inputs. Run them in CI.
+- **LLM evaluations** in `evals/` that score the skill against a labelled
+  dataset. Track scores over time; regressions should block merges.
+- Include at least one **adversarial / jailbreak** test for any skill that
+  ingests untrusted text.
+- Aim for ≥ 80% line coverage on supporting code, but treat eval scores as
+  the primary quality signal.
 
-- Catch expected errors (network timeouts, missing files, validation failures) and return a structured error object.
-- Let unexpected errors propagate — silent failures are worse than crashes.
-- Never `except: pass`. Never swallow stack traces.
+### 8. Security & Safety
 
-### 9. Be deliberate about secrets and PII
+- **Never commit secrets.** Use environment variables and document the
+  required names in `SKILL.md`. Scan PRs with secret-detection in CI.
+- **Principle of least privilege** for tokens and API keys — scope them to
+  the minimum needed.
+- **Sanitize outputs** before passing them to other tools (shell, SQL,
+  filesystem).
+- **Refuse disallowed content.** Skills must respect the platform's content
+  policy and decline requests that violate it.
+- **PII handling.** Redact or hash PII in logs by default; document any
+  retention.
+- **Prompt-injection defence.** Treat retrieved/tool output as untrusted;
+  do not let it override system instructions.
 
-- Skills must **not** read environment variables for credentials directly; accept them as arguments so the caller controls scope.
-- Never log full request/response bodies for authenticated calls.
-- Redact obvious PII (emails, phone numbers, account numbers) from any debug output.
-- Add a secret-scan step to the test suite for any skill that touches credentials.
+### 9. Observability & Logging
 
-### 10. Keep skills token-efficient
+- Emit a structured log line per invocation with: `skill_name`, `version`,
+  `request_id`, `latency_ms`, `tokens_in`, `tokens_out`, `model`,
+  `outcome` (`success`/`error`), `error_code`.
+- Never log raw secrets or full PII payloads.
+- Expose metrics (Prometheus / OpenTelemetry) for: invocation count,
+  latency, error rate, and eval score.
+- Include the `request_id` in every downstream call so traces can be
+  correlated.
 
-The agent pays for every byte it reads.
+### 10. Versioning & Release
 
-- Keep `SKILL.md` under ~200 lines. Move long examples into `examples/`.
-- Don't dump entire files into the agent context — return paths, summaries, or paginated chunks.
-- Prefer streaming or chunked outputs for anything larger than ~10 KB.
+- Use **SemVer** for each skill: breaking change → major, additive →
+  minor, fix → patch.
+- Bump the `version:` field in `SKILL.md` **in the same PR** as the change.
+- Maintain a `CHANGELOG.md` per skill.
+- Tag releases as `skill/<name>@<version>` so they can be pinned.
+- Deprecate before deleting: mark `stability: deprecated`, give consumers
+  at least one minor release before removal.
 
-### 11. Ship tests with every skill
+### 11. Documentation
 
-Each skill directory must include `tests/` with:
+- Every skill needs: one-line description, when-to-use, when-NOT-to-use,
+  inputs, outputs, examples, and a runnable quick-start.
+- Cross-link related skills.
+- Record non-obvious design decisions as ADRs under `docs/adr/`.
+- Keep docs in source control; do not rely on external wikis.
 
-- a happy-path test using a realistic input fixture,
-- at least one error-path test (bad input, missing file, network failure),
-- a test that asserts the output schema (not just "didn't crash").
+### 12. Contributing
 
-CI runs `pytest skills/<name>/tests/` for every changed skill on every PR.
-
-### 12. Version and document breaking changes
-
-- Bump a `version:` field in `SKILL.md` using semver.
-- Breaking changes (renamed args, changed output shape, removed triggers) require:
-  1. a major-version bump,
-  2. an entry in `CHANGELOG.md`,
-  3. a deprecation notice left in place for at least one minor version before removal.
-- Never rewrite history of a released skill. Add a new skill if the contract has to change incompatibly.
+- Branch naming: `iss-<id>-<short-slug>` (e.g. `iss-144-readme-best-practices`).
+- One skill change per PR. Keep diffs reviewable (< ~400 lines where possible).
+- PR description must include:
+  - What the skill does (or what changed).
+  - Eval results before/after.
+  - Any new dependencies or env vars.
+- All CI checks (lint, schema-validate, unit tests, evals) must pass before
+  merge.
+- At least one CODEOWNER review is required.
 
 ---
 
-## Contributing a new skill
+## License
 
-1. Create `skills/<your-skill-name>/` with `SKILL.md`, an entry point, `examples/`, and `tests/`.
-2. Run the test suite locally: `pytest skills/<your-skill-name>/tests/`.
-3. Open a PR. The PR description should answer:
-   - What problem does this skill solve?
-   - Which triggers route to it?
-   - What are its side effects, if any?
-4. A reviewer will check the skill against the [best practices](#best-practices) above before merging.
-
-Welcome aboard — keep your skills small, sharp, and well-documented.
+See [`LICENSE`](LICENSE) (add one before publishing externally).
